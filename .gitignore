@@ -1,0 +1,34 @@
+# Dependency directories
+node_modules/
+
+# Build output directories
+dist/
+out/
+
+# VS Code specific
+.vscode-test/
+*.vsix
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and editor files
+.env
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Compiled TypeScript files
+*.tsbuildinfo
+*.tsbuildinfo.*
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
