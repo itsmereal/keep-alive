@@ -1,0 +1,54 @@
+{
+  "name": "keep-alive",
+  "displayName": "Tab Keep Alive",
+  "description": "Automatically refreshes tabs to keep remote connections alive",
+  "version": "0.0.2",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "dist/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --platform=node --target=node16 --external:vscode",
+    "watch": "npm run compile -- --watch",
+    "pretest": "npm run compile",
+    "test": "vscode-test"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Tab Rotator",
+      "properties": {
+        "tabRotator.tabs": {
+          "type": "array",
+          "default": [],
+          "description": "List of tabs to rotate"
+        },
+        "tabRotator.interval": {
+          "type": "number",
+          "default": 5,
+          "description": "Interval for tab rotation in seconds"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "tabRotator.configureTabs",
+        "title": "Tab Rotator: Configure Tabs and Interval"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^16.11.7",
+    "esbuild": "^0.19.5",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.8",
+    "typescript": "^5.2.2"
+  }
+}
