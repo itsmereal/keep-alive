@@ -37,29 +37,64 @@ module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
 var path = __toESM(require("path"));
 function activate(context) {
-  const getShortFileName = (fullPath) => {
-    const fileName = path.basename(fullPath);
-    const directory = path.dirname(fullPath).split(path.sep).pop();
-    return `${directory}/${fileName}`;
+  const statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100
+  );
+  statusBarItem.text = "$(pulse) Keep Alive: Inactive";
+  statusBarItem.tooltip = "Tab Keep Alive Extension";
+  statusBarItem.command = "keepAlive.toggleStatus";
+  statusBarItem.show();
+  const outputChannel = vscode.window.createOutputChannel("Tab Keep Alive");
+  let rotationInterval = null;
+  let failedAttempts = 0;
+  const MAX_FAILED_ATTEMPTS = 3;
+  const updateStatusBar = (status) => {
+    switch (status) {
+      case "active":
+        statusBarItem.text = "$(pulse) Keep Alive: Active";
+        statusBarItem.color = new vscode.ThemeColor("terminal.ansiGreen");
+        break;
+      case "inactive":
+        statusBarItem.text = "$(pulse) Keep Alive: Inactive";
+        statusBarItem.color = void 0;
+        break;
+      case "error":
+        statusBarItem.text = "$(error) Keep Alive: Error";
+        statusBarItem.color = new vscode.ThemeColor("terminal.ansiRed");
+        break;
+    }
+    statusBarItem.show();
   };
-  let disposable = vscode.commands.registerCommand(
+  const configureTabsCommand = vscode.commands.registerCommand(
     "tabRotator.configureTabs",
     async () => {
       try {
-        const editors = vscode.window.visibleTextEditors;
+        const editors = vscode.window.visibleTextEditors.filter(
+          (editor) => editor.document.uri.scheme !== "file"
+        );
         if (editors.length === 0) {
-          vscode.window.showWarningMessage("No open tabs to rotate.");
+          vscode.window.showWarningMessage(
+            "No remote files found. Please open your remote files first."
+          );
           return;
         }
+        outputChannel.appendLine(
+          `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Available remote editors:`
+        );
+        editors.forEach((editor) => {
+          outputChannel.appendLine(
+            `URI: ${editor.document.uri.toString()}, Scheme: ${editor.document.uri.scheme}`
+          );
+        });
         const quickPick = vscode.window.createQuickPick();
         quickPick.items = editors.map((editor) => ({
-          label: getShortFileName(editor.document.fileName),
-          description: editor.document.fileName,
+          label: path.basename(editor.document.fileName),
+          description: editor.document.uri.toString(),
           picked: true
-          // Default to all tabs selected
         }));
         quickPick.canSelectMany = true;
-        quickPick.title = "Select Tabs to Rotate";
+        quickPick.title = "Select Remote Files to Keep Alive";
         const currentConfig = vscode.workspace.getConfiguration("tabRotator");
         const currentInterval = currentConfig.get("interval", 5);
         const intervalInput = await vscode.window.showInputBox({
@@ -76,37 +111,148 @@ function activate(context) {
           const selectedTabs = quickPick.selectedItems;
           const interval = intervalInput ? parseInt(intervalInput) : currentInterval;
           if (selectedTabs.length === 0) {
-            vscode.window.showWarningMessage("Please select at least one tab.");
+            vscode.window.showWarningMessage(
+              "Please select at least one remote file."
+            );
             return;
           }
-          try {
-            vscode.workspace.getConfiguration("tabRotator").update(
-              "tabs",
-              selectedTabs.map((tab) => tab.description),
-              vscode.ConfigurationTarget.Global
-            );
-            vscode.workspace.getConfiguration("tabRotator").update("interval", interval, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(
-              `Tab Rotator configured: ${selectedTabs.length} tabs, ${interval} second interval`
-            );
-          } catch (error) {
-            vscode.window.showErrorMessage(
-              `Failed to update configuration: ${error instanceof Error ? error.message : "Unknown error"}`
-            );
-          }
+          vscode.workspace.getConfiguration("tabRotator").update(
+            "tabs",
+            selectedTabs.map((item) => item.description),
+            // Store full URI
+            vscode.ConfigurationTarget.Global
+          );
+          vscode.workspace.getConfiguration("tabRotator").update("interval", interval, vscode.ConfigurationTarget.Global);
+          vscode.window.showInformationMessage(
+            `Keep Alive configured with ${selectedTabs.length} remote files and ${interval} second interval`
+          );
           quickPick.hide();
         });
-        quickPick.onDidHide(() => {
-          quickPick.dispose();
-        });
       } catch (error) {
+        outputChannel.appendLine(
+          `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Configuration error: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
         vscode.window.showErrorMessage(
-          `Tab Rotator configuration failed: ${error instanceof Error ? error.message : "Unknown error"}`
+          "Failed to configure remote files. Please try again."
         );
       }
     }
   );
-  context.subscriptions.push(disposable);
+  const startKeepAliveCommand = vscode.commands.registerCommand(
+    "keepAlive.start",
+    async () => {
+      try {
+        const config = vscode.workspace.getConfiguration("tabRotator");
+        const configuredUris = config.get("tabs", []);
+        const interval = config.get("interval", 5) * 1e3;
+        if (configuredUris.length === 0) {
+          vscode.window.showWarningMessage(
+            "No remote files configured. Please configure files first."
+          );
+          updateStatusBar("error");
+          return;
+        }
+        if (rotationInterval) {
+          clearInterval(rotationInterval);
+        }
+        failedAttempts = 0;
+        outputChannel.appendLine(
+          `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Starting Keep Alive`
+        );
+        outputChannel.appendLine(
+          `Configured URIs: ${configuredUris.join(", ")}`
+        );
+        updateStatusBar("active");
+        rotationInterval = setInterval(async () => {
+          for (const uriString of configuredUris) {
+            try {
+              const uri = vscode.Uri.parse(uriString);
+              const editor = vscode.window.visibleTextEditors.find(
+                (e) => e.document.uri.toString() === uriString
+              );
+              if (editor) {
+                await vscode.window.showTextDocument(editor.document, {
+                  preview: false,
+                  preserveFocus: true,
+                  viewColumn: editor.viewColumn
+                });
+                outputChannel.appendLine(
+                  `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Refreshed: ${uriString}`
+                );
+                failedAttempts = 0;
+              } else {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                await vscode.window.showTextDocument(doc, {
+                  preview: false,
+                  preserveFocus: true
+                });
+              }
+            } catch (error) {
+              failedAttempts++;
+              outputChannel.appendLine(
+                `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Error refreshing: ${uriString}`
+              );
+              outputChannel.appendLine(
+                `Error details: ${error instanceof Error ? error.message : "Unknown error"}`
+              );
+              if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+                vscode.window.showErrorMessage(
+                  "Keep Alive failed multiple times. Please check your remote connection."
+                );
+                updateStatusBar("error");
+                if (rotationInterval) {
+                  clearInterval(rotationInterval);
+                  rotationInterval = null;
+                }
+                break;
+              }
+            }
+          }
+        }, interval);
+        vscode.window.showInformationMessage(
+          `Keep Alive started for ${configuredUris.length} remote files, refreshing every ${interval / 1e3} seconds`
+        );
+      } catch (error) {
+        outputChannel.appendLine(
+          `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Start error: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+        vscode.window.showErrorMessage("Failed to start Keep Alive.");
+        updateStatusBar("error");
+      }
+    }
+  );
+  const stopKeepAliveCommand = vscode.commands.registerCommand(
+    "keepAlive.stop",
+    () => {
+      if (rotationInterval) {
+        clearInterval(rotationInterval);
+        rotationInterval = null;
+        updateStatusBar("inactive");
+        outputChannel.appendLine(
+          `[${(/* @__PURE__ */ new Date()).toLocaleString()}] Keep Alive stopped`
+        );
+        vscode.window.showInformationMessage("Keep Alive stopped");
+      }
+    }
+  );
+  const toggleStatusCommand = vscode.commands.registerCommand(
+    "keepAlive.toggleStatus",
+    () => {
+      if (rotationInterval) {
+        vscode.commands.executeCommand("keepAlive.stop");
+      } else {
+        vscode.commands.executeCommand("keepAlive.start");
+      }
+    }
+  );
+  context.subscriptions.push(
+    statusBarItem,
+    outputChannel,
+    configureTabsCommand,
+    startKeepAliveCommand,
+    stopKeepAliveCommand,
+    toggleStatusCommand
+  );
 }
 function deactivate() {
 }

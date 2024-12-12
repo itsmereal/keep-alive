@@ -15,7 +15,11 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:keepAlive.configure",
+    "onCommand:keepAlive.start",
+    "onCommand:keepAlive.stop",
+    "onCommand:keepAlive.toggleStatus"
   ],
   "main": "dist/extension.js",
   "scripts": {
@@ -27,24 +31,36 @@
   },
   "contributes": {
     "configuration": {
-      "title": "Tab Rotator",
+      "title": "Keep Alive",
       "properties": {
-        "tabRotator.tabs": {
+        "keepAlive.files": {
           "type": "array",
           "default": [],
-          "description": "List of tabs to rotate"
+          "description": "List of files to keep alive"
         },
-        "tabRotator.interval": {
+        "keepAlive.interval": {
           "type": "number",
           "default": 5,
-          "description": "Interval for tab rotation in seconds"
+          "description": "Interval for keep alive in seconds"
         }
       }
     },
     "commands": [
       {
-        "command": "tabRotator.configureTabs",
-        "title": "Tab Rotator: Configure Tabs and Interval"
+        "command": "keepAlive.configure",
+        "title": "Keep Alive: Configure Files and Interval"
+      },
+      {
+        "command": "keepAlive.start",
+        "title": "Keep Alive: Start"
+      },
+      {
+        "command": "keepAlive.stop",
+        "title": "Keep Alive: Stop"
+      },
+      {
+        "command": "keepAlive.toggleStatus",
+        "title": "Keep Alive: Toggle Status"
       }
     ]
   },
