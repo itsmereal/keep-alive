@@ -3,6 +3,11 @@
   "displayName": "Tab Keep Alive",
   "description": "Automatically refreshes tabs to keep remote connections alive",
   "version": "0.0.2",
+  "publisher": "itsmereal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itsmereal/keep-alive"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
