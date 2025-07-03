@@ -18,6 +18,7 @@ export function activate(context: vscode.ExtensionContext) {
   let rotationInterval: NodeJS.Timeout | null = null;
   let failedAttempts = 0;
   const MAX_FAILED_ATTEMPTS = 3;
+  let isProcessing = false; // Prevent overlapping operations
 
   // Function to update status bar
   const updateStatusBar = (status: "active" | "inactive" | "error") => {
@@ -42,6 +43,8 @@ export function activate(context: vscode.ExtensionContext) {
   const configureTabsCommand = vscode.commands.registerCommand(
     "keepAlive.configure",
     async () => {
+      let quickPick: vscode.QuickPick<vscode.QuickPickItem> | undefined;
+
       try {
         // Get all visible text editors with remote files
         const editors = vscode.window.visibleTextEditors.filter(
@@ -67,17 +70,7 @@ export function activate(context: vscode.ExtensionContext) {
           );
         });
 
-        // Create quick pick for selection
-        const quickPick = vscode.window.createQuickPick();
-        quickPick.items = editors.map((editor) => ({
-          label: path.basename(editor.document.fileName),
-          description: editor.document.uri.toString(),
-          picked: true,
-        }));
-        quickPick.canSelectMany = true;
-        quickPick.title = "Select Remote Files to Keep Alive";
-
-        // Get interval input
+        // Get interval input first
         const currentConfig = vscode.workspace.getConfiguration("keepAlive");
         const currentInterval = currentConfig.get<number>("interval", 5);
 
@@ -93,37 +86,106 @@ export function activate(context: vscode.ExtensionContext) {
           },
         });
 
-        quickPick.show();
+        // User cancelled interval input
+        if (intervalInput === undefined) {
+          return;
+        }
 
-        quickPick.onDidAccept(() => {
-          const selectedTabs = quickPick.selectedItems;
-          const interval = intervalInput
-            ? parseInt(intervalInput)
-            : currentInterval;
+        const interval = parseInt(intervalInput);
+        if (isNaN(interval) || interval <= 0) {
+          vscode.window.showErrorMessage("Invalid interval provided.");
+          return;
+        }
 
-          if (selectedTabs.length === 0) {
-            vscode.window.showWarningMessage(
-              "Please select at least one remote file."
-            );
-            return;
+        // Get silent mode preference
+        const currentSilentMode = vscode.workspace
+          .getConfiguration("keepAlive")
+          .get<boolean>("silentMode", true);
+        const silentModeChoice = await vscode.window.showQuickPick(
+          [
+            {
+              label: "Silent Mode (Recommended)",
+              description:
+                "Keep tabs alive without focusing them - no visual disruption",
+              value: true,
+            },
+            {
+              label: "Visual Mode",
+              description:
+                "Focus tabs when refreshing - you'll see each tab switch",
+              value: false,
+            },
+          ],
+          {
+            placeHolder: `Current mode: ${
+              currentSilentMode ? "Silent" : "Visual"
+            }`,
+            title: "Choose Keep Alive Mode",
           }
+        );
 
-          // Store the full URIs
-          vscode.workspace.getConfiguration("keepAlive").update(
-            "files",
-            selectedTabs.map((item) => item.description),
+        if (!silentModeChoice) {
+          return; // User cancelled
+        }
+
+        // Create quick pick for selection
+        quickPick = vscode.window.createQuickPick();
+        quickPick.items = editors.map((editor) => ({
+          label: path.basename(editor.document.fileName),
+          description: editor.document.uri.toString(),
+          picked: true,
+        }));
+        quickPick.canSelectMany = true;
+        quickPick.title = "Select Remote Files to Keep Alive";
+
+        // Set up promise to handle user interaction
+        const result = await new Promise<vscode.QuickPickItem[] | undefined>(
+          (resolve) => {
+            quickPick!.onDidAccept(() => {
+              resolve(quickPick!.selectedItems as vscode.QuickPickItem[]);
+            });
+
+            quickPick!.onDidHide(() => {
+              resolve(undefined);
+            });
+
+            quickPick!.show();
+          }
+        );
+
+        if (!result || result.length === 0) {
+          vscode.window.showWarningMessage(
+            "Please select at least one remote file."
+          );
+          return;
+        }
+
+        // Store the full URIs
+        await vscode.workspace.getConfiguration("keepAlive").update(
+          "files",
+          result.map((item) => item.description),
+          vscode.ConfigurationTarget.Global
+        );
+
+        await vscode.workspace
+          .getConfiguration("keepAlive")
+          .update("interval", interval, vscode.ConfigurationTarget.Global);
+
+        await vscode.workspace
+          .getConfiguration("keepAlive")
+          .update(
+            "silentMode",
+            silentModeChoice.value,
             vscode.ConfigurationTarget.Global
           );
 
-          vscode.workspace
-            .getConfiguration("keepAlive")
-            .update("interval", interval, vscode.ConfigurationTarget.Global);
-
-          vscode.window.showInformationMessage(
-            `Keep Alive configured with ${selectedTabs.length} remote files and ${interval} second interval`
-          );
-          quickPick.hide();
-        });
+        vscode.window.showInformationMessage(
+          `Keep Alive configured with ${
+            result.length
+          } remote files, ${interval} second interval, ${
+            silentModeChoice.value ? "Silent" : "Visual"
+          } mode`
+        );
       } catch (error) {
         outputChannel.appendLine(
           `[${new Date().toLocaleString()}] Configuration error: ${
@@ -133,6 +195,9 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage(
           "Failed to configure remote files. Please try again."
         );
+      } finally {
+        // Ensure QuickPick is always disposed
+        quickPick?.dispose();
       }
     }
   );
@@ -142,10 +207,21 @@ export function activate(context: vscode.ExtensionContext) {
     "keepAlive.start",
     async () => {
       try {
+        // Prevent multiple simultaneous start operations
+        if (isProcessing) {
+          vscode.window.showWarningMessage(
+            "Keep Alive operation already in progress."
+          );
+          return;
+        }
+
+        isProcessing = true;
+
         // Get configured tabs and interval
         const config = vscode.workspace.getConfiguration("keepAlive");
         const configuredUris = config.get<string[]>("files", []);
         const interval = config.get<number>("interval", 5) * 1000;
+        const silentMode = config.get<boolean>("silentMode", true);
 
         if (configuredUris.length === 0) {
           vscode.window.showWarningMessage(
@@ -158,6 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
         // Stop existing interval if any
         if (rotationInterval) {
           clearInterval(rotationInterval);
+          rotationInterval = null;
         }
 
         // Reset failed attempts
@@ -174,68 +251,117 @@ export function activate(context: vscode.ExtensionContext) {
         // Update status
         updateStatusBar("active");
 
-        // Start interval
+        // Start interval with debouncing
         rotationInterval = setInterval(async () => {
-          for (const uriString of configuredUris) {
-            try {
-              // Parse the URI
-              const uri = vscode.Uri.parse(uriString);
+          // Skip if previous operation is still running
+          if (isProcessing) {
+            outputChannel.appendLine(
+              `[${new Date().toLocaleString()}] Skipping refresh cycle - previous operation still in progress`
+            );
+            return;
+          }
 
-              // Find existing editor with this URI
-              const editor = vscode.window.visibleTextEditors.find(
-                (e) => e.document.uri.toString() === uriString
-              );
+          isProcessing = true;
 
-              if (editor) {
-                // Use existing editor
-                await vscode.window.showTextDocument(editor.document, {
-                  preview: false,
-                  preserveFocus: true,
-                  viewColumn: editor.viewColumn,
-                });
+          try {
+            for (const uriString of configuredUris) {
+              try {
+                // Parse the URI
+                const uri = vscode.Uri.parse(uriString);
 
-                outputChannel.appendLine(
-                  `[${new Date().toLocaleString()}] Refreshed: ${uriString}`
+                // Find existing editor with this URI
+                const editor = vscode.window.visibleTextEditors.find(
+                  (e) => e.document.uri.toString() === uriString
                 );
-                failedAttempts = 0;
-              } else {
-                // Try to open the document
-                const doc = await vscode.workspace.openTextDocument(uri);
-                await vscode.window.showTextDocument(doc, {
-                  preview: false,
-                  preserveFocus: true,
-                });
-              }
-            } catch (error) {
-              failedAttempts++;
-              outputChannel.appendLine(
-                `[${new Date().toLocaleString()}] Error refreshing: ${uriString}`
-              );
-              outputChannel.appendLine(
-                `Error details: ${
-                  error instanceof Error ? error.message : "Unknown error"
-                }`
-              );
 
-              if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
-                vscode.window.showErrorMessage(
-                  "Keep Alive failed multiple times. Please check your remote connection."
-                );
-                updateStatusBar("error");
-                if (rotationInterval) {
-                  clearInterval(rotationInterval);
-                  rotationInterval = null;
+                if (silentMode) {
+                  // Silent mode - just access the document without showing it
+                  if (editor) {
+                    // Document is already open - just access it to keep connection alive
+                    const text = editor.document.getText(
+                      new vscode.Range(0, 0, 0, 1)
+                    );
+                    outputChannel.appendLine(
+                      `[${new Date().toLocaleString()}] Silent refresh: ${uriString} (${
+                        text.length
+                      } chars)`
+                    );
+                  } else {
+                    // Try to open the document silently
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    const text = doc.getText(new vscode.Range(0, 0, 0, 1));
+                    outputChannel.appendLine(
+                      `[${new Date().toLocaleString()}] Silent opened: ${uriString} (${
+                        text.length
+                      } chars)`
+                    );
+                  }
+                  failedAttempts = 0;
+                } else {
+                  // Visual mode - show the document (original behavior)
+                  if (editor) {
+                    // Use existing editor
+                    await vscode.window.showTextDocument(editor.document, {
+                      preview: false,
+                      preserveFocus: true,
+                      ...(editor.viewColumn && {
+                        viewColumn: editor.viewColumn,
+                      }),
+                    });
+
+                    outputChannel.appendLine(
+                      `[${new Date().toLocaleString()}] Visual refresh: ${uriString}`
+                    );
+                    failedAttempts = 0;
+                  } else {
+                    // Try to open the document
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    await vscode.window.showTextDocument(doc, {
+                      preview: false,
+                      preserveFocus: true,
+                    });
+
+                    outputChannel.appendLine(
+                      `[${new Date().toLocaleString()}] Visual opened: ${uriString}`
+                    );
+                    failedAttempts = 0;
+                  }
                 }
-                break;
+              } catch (error) {
+                failedAttempts++;
+                outputChannel.appendLine(
+                  `[${new Date().toLocaleString()}] Error refreshing: ${uriString}`
+                );
+                outputChannel.appendLine(
+                  `Error details: ${
+                    error instanceof Error ? error.message : "Unknown error"
+                  }`
+                );
+
+                if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
+                  vscode.window.showErrorMessage(
+                    "Keep Alive failed multiple times. Please check your remote connection."
+                  );
+                  updateStatusBar("error");
+                  if (rotationInterval) {
+                    clearInterval(rotationInterval);
+                    rotationInterval = null;
+                  }
+                  break;
+                }
               }
             }
+          } finally {
+            isProcessing = false;
           }
         }, interval);
 
         vscode.window.showInformationMessage(
           `Keep Alive started for ${
             configuredUris.length
-          } remote files, refreshing every ${interval / 1000} seconds`
+          } remote files, refreshing every ${interval / 1000} seconds ${
+            silentMode ? "(Silent Mode)" : "(Visual Mode)"
+          }`
         );
       } catch (error) {
         outputChannel.appendLine(
@@ -245,6 +371,8 @@ export function activate(context: vscode.ExtensionContext) {
         );
         vscode.window.showErrorMessage("Failed to start Keep Alive.");
         updateStatusBar("error");
+      } finally {
+        isProcessing = false;
       }
     }
   );
@@ -262,6 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
         );
         vscode.window.showInformationMessage("Keep Alive stopped");
       }
+      isProcessing = false; // Reset processing flag
     }
   );
 
@@ -289,5 +418,5 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  // Cleanup
+  // Cleanup is handled by context.subscriptions
 }

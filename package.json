@@ -2,7 +2,7 @@
   "name": "keep-alive",
   "displayName": "Tab Keep Alive",
   "description": "Automatically refreshes tabs to keep remote connections alive",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "itsmereal",
   "repository": {
     "type": "git",
@@ -24,7 +24,7 @@
   "main": "dist/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --platform=node --target=node16 --external:vscode",
+    "compile": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --platform=node --target=node16 --external:vscode && esbuild ./src/test/extension.test.ts --bundle --outfile=dist/test/extension.test.js --platform=node --target=node16 --external:vscode --external:assert",
     "watch": "npm run compile -- --watch",
     "pretest": "npm run compile",
     "test": "vscode-test"
@@ -42,6 +42,11 @@
           "type": "number",
           "default": 5,
           "description": "Interval for keep alive in seconds"
+        },
+        "keepAlive.silentMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep tabs alive without focusing them (recommended for uninterrupted workflow)"
         }
       }
     },
@@ -65,11 +70,13 @@
     ]
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
     "@types/node": "^16.11.7",
-    "esbuild": "^0.19.5",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.35.1",
+    "@typescript-eslint/parser": "^8.35.1",
     "@vscode/test-cli": "^0.0.4",
     "@vscode/test-electron": "^2.3.8",
+    "esbuild": "^0.25.5",
     "typescript": "^5.2.2"
   }
 }
