@@ -131,7 +131,7 @@ npx tsc --noEmit
 
 ## Change Log
 
-### [0.0.3] - 2025-01-03
+### [0.0.3] - 2025-07-04
 
 - **NEW: Silent Mode (Default)** - Keep tabs alive without focusing them for uninterrupted workflow
 - **NEW: Visual Mode** - Optional mode to see tab switching during refresh
